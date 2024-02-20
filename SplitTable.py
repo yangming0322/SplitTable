@@ -42,10 +42,13 @@ def read_table_file(file_path):
     # 确保文件指针在开始位置
     file_path.seek(0)
 
+    # 将文件扩展名转换为小写，以便处理大写扩展名
+    file_extension = file_path.name.split('.')[-1].lower()
+
     # 根据文件的扩展名，使用不同的函数读取数据
-    if file_path.name.endswith('.csv'):
+    if file_extension == 'csv':
         df = pd.read_csv(file_path)
-    else:
+    elif file_extension in ['xls', 'xlsx']:
         df = pd.read_excel(file_path)
 
     return df
