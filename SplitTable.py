@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import os
 import re
+import io
+import zipfile
 
 
 def is_valid_path(path):
@@ -25,6 +27,7 @@ def is_valid_path(path):
         osx_pattern = r'^/([^/:*?"<>|\r\n]+/)*[^/:*?"<>|\r\n]*$'
         return re.match(osx_pattern, path) is not None
 
+@st.cache_resource
 def read_table_file(file_path):
     """
     读取表格文件的函数。
@@ -79,34 +82,11 @@ def main():
     # 设置H3标题为“文件设置”
     st.subheader('文件设置')
 
-    # 设置两个st.columns
-    col1, col2 = st.columns([3, 2])
+    # 设置文件上传的按钮
+    excel_path = st.file_uploader("选择需拆分的Excel、csv文件", type=['xlsx', 'xls', 'csv'])
 
-    with col1:
-        # 设置文件上传的按钮
-        excel_path = st.file_uploader("选择需拆分的Excel、csv文件", type=['xlsx', 'xls', 'csv'])
-
-    with col2:
-        # 设置一个文件夹地址的选择框
-        output_folder = st.text_input("输出文件夹地址")
-
-        # 如果output_folder的前后带有单引号或双引号，则去掉
-        if output_folder.startswith(('"', "'")) and output_folder.endswith(('"', "'")):
-            output_folder = output_folder[1:-1]
-
-        # 如果output_folder不为空，则检查路径是否合法
-        if output_folder:
-            if not is_valid_path(output_folder):
-                st.error('😭 请输入正确的文件夹地址')
-
-            else:
-                # 如果文件夹地址合法，则提示用户
-                st.info('👍 输入正确')
-
-
-
-    # 如果excel_path 和output_folder不为空时，则读取excel
-    if excel_path and output_folder:
+    # 如果excel_path不为空时，则读取excel
+    if excel_path:
 
         # 读取excel
         # 以字符串方式读取指定列名
@@ -147,7 +127,7 @@ def main():
 
 
         # 提交按钮
-        if st.button('提交',use_container_width=True, type='primary'):
+        if st.button('提交',use_container_width=True, type='secondary'):
 
             # 检查结束列是否为空，如果为空则提示用户
             if not end_col:
@@ -160,10 +140,6 @@ def main():
             # 如果结束列和拆分依据列任意为空时，则不进行拆分
             if not end_col or not group_col:
                 st.stop()
-
-            # 检查输出文件夹是否存在，如果不存在则创建
-            if not os.path.exists(output_folder):
-                os.makedirs(output_folder)
 
             # 区分文件类型，如果是csv文件，则读取csv
             df = read_table_file(excel_path)
@@ -180,30 +156,59 @@ def main():
             total_groups = len(df[group_col].unique())
             current_group_number = 0
 
-            for group, data in df.groupby(group_col):
-                # 更新文件名中不允许的字符
-                safe_group_name = str(group).replace(':', '-').replace('/', '-')
-                file_path = os.path.join(output_folder, f'{safe_group_name}.xlsx')
+            # 创建一个BytesIO对象来存储压缩包
+            zip_buffer = io.BytesIO()
 
-                # 保存分组数据到Excel
-                data.iloc[:, :col_names.index(end_col) + 1].to_excel(file_path, index=False)
+            # 创建一个ZipFile对象，用于添加Excel文件
+            with zipfile.ZipFile(zip_buffer, 'a', zipfile.ZIP_DEFLATED, False) as zip_file:
+                for group, data in df.groupby(group_col):
+                    # 生成安全的组名
+                    safe_group_name = str(group).replace(':', '-').replace('/', '-')
+                    excel_buffer = io.BytesIO()
 
-                # 更新当前处理的组号
-                current_group_number += 1
+                    # 保存DataFrame到excel buffer中
+                    data.iloc[:, :col_names.index(end_col) + 1].to_excel(excel_buffer, index=False)
 
-                # 更新进度条
-                progress = int(current_group_number / total_groups * 100)
-                my_bar.progress(progress, text=progress_text)
+                    # 将buffer的内容添加到zip文件中
+                    zip_file.writestr(f'{safe_group_name}.xlsx', excel_buffer.getvalue())
+
+                    # 更新当前处理的组号
+                    current_group_number += 1
+
+                    # 更新进度条
+                    progress = int(current_group_number / total_groups * 100)
+                    my_bar.progress(progress, text=progress_text)
+
+            # 设置一个短日期和时间的字符串
+            short_date_time = pd.Timestamp.now().strftime("%Y%m%d-%H%M%S")
+
+            # 使用Streamlit的download button提供下载
+            st.download_button(
+                label="下载拆分结果",
+                data=zip_buffer,
+                file_name=f"表格拆分结果-{short_date_time}.zip",
+                mime="application/zip",
+                use_container_width=True,
+                type='primary'
+            )
+
+            # 重置buffer的位置到开始
+            zip_buffer.seek(0)
 
             # 完成后移除进度条和文本
             my_bar.empty()
             st.success('🎉拆分完成！')
+
+            # 清除缓存
+            st.cache_resource.clear()
 
             # 提示用户有那几列被转为了字符串类型
             if long_digit_cols:
                 st.info(f'⚠️以下列被转为了字符串类型：{long_digit_cols}')
 
             st.balloons()
+
+
 
 if __name__ == "__main__":
     main()
